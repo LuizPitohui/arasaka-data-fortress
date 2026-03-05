@@ -1,0 +1,76 @@
+services:
+  # --------------------------------------------------------------------------
+  # DATABASE SECTOR (PostgreSQL 17)
+  # --------------------------------------------------------------------------
+  db:
+    image: postgres:17-alpine
+    container_name: arasaka_db_core
+    restart: always
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=${DB_NAME:-arasaka_db}
+      - POSTGRES_USER=${DB_USER:-arasaka_admin}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-secure_password}
+    ports:
+      - "5432:5432"
+    networks:
+      - arasaka_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-arasaka_admin} -d ${DB_NAME:-arasaka_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # STORAGE SECTOR (MinIO - S3 Compatible)
+  # --------------------------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    container_name: arasaka_storage_unit
+    restart: always
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-minioadmin}
+    volumes:
+      - minio_data:/data
+    networks:
+      - arasaka_net
+    # Correção do Healthcheck: Usando IP local e tempo de inicio maior
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 10s # Dá 10s pro MinIO "acordar" antes de testar
+
+  # --------------------------------------------------------------------------
+  # AUTO-CONFIGURATOR
+  # --------------------------------------------------------------------------
+  createbuckets:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Inicializando Protocolo de Bucket...';
+      /usr/bin/mc alias set myminio http://minio:9000 ${MINIO_ACCESS_KEY:-minioadmin} ${MINIO_SECRET_KEY:-minioadmin};
+      /usr/bin/mc mb myminio/${MINIO_BUCKET_NAME:-arasaka-vault} || echo 'Bucket já existe';
+      /usr/bin/mc anonymous set public myminio/${MINIO_BUCKET_NAME:-arasaka-vault};
+      exit 0;
+      "
+    networks:
+      - arasaka_net
+
+volumes:
+  postgres_data:
+  minio_data:
+
+networks:
+  arasaka_net:
+    driver: bridge
